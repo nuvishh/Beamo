@@ -60,10 +60,10 @@ class _SendScreenState extends State<SendScreen> {
   }
 
   Future<void> _pickFiles() async {
-    final result = await FilePicker.platform.pickFiles(allowMultiple: true);
-    if (result == null) return;
+    final files = await FilePicker.pickFiles();
+    if (files.isEmpty) return;
     setState(() {
-      for (final f in result.files) {
+      for (final f in files) {
         if (f.path != null && !_files.any((e) => e.path == f.path)) {
           _files.add(f);
         }
@@ -157,7 +157,7 @@ class _SendScreenState extends State<SendScreen> {
               child: ListTile(
                 leading: const Icon(Icons.insert_drive_file),
                 title: Text(f.name, overflow: TextOverflow.ellipsis),
-                subtitle: Text(_fmtSize(f.size)),
+                subtitle: Text(_fmtSize(f.lengthSync() ?? 0)),
                 trailing: Row(
                   mainAxisSize: MainAxisSize.min,
                   children: [

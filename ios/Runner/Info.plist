@@ -66,5 +66,11 @@
 		<string>UIInterfaceOrientationLandscapeLeft</string>
 		<string>UIInterfaceOrientationLandscapeRight</string>
 	</array>
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>Beamo needs local network access to find nearby devices.</string>
+	<key>NSBonjourServices</key>
+	<array>
+		<string>_beamo._tcp</string>
+	</array>
 </dict>
 </plist>

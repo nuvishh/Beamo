@@ -10,8 +10,8 @@ import '../models/transfer.dart';
 
 /// HTTP client used by the SENDER.
 ///
-/// Flow per file: POST /offer -> poll GET /offer/<id>/status until
-/// accepted/declined -> POST /upload/<id> with raw bytes.
+/// Flow per file: `POST /offer` -> poll `GET /offer/<id>/status` until
+/// accepted/declined -> `POST /upload/<id>` with raw bytes.
 class ShareClient {
   final http.Client _client = http.Client();
 

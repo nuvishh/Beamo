@@ -36,8 +36,8 @@ class _OfferState {
 /// Protocol:
 ///   GET  /ping                 -> {"name": ..., "version": 1}
 ///   POST /offer                -> {"ok": true, "id": ...}   (body: filename, size, senderName)
-///   GET  /offer/<id>/status    -> {"status": "pending|accepted|declined|..."}
-///   POST /upload/<id>          -> raw bytes, returns {"ok": true}
+///   `GET  /offer/<id>/status`    -> {"status": "pending|accepted|declined|..."}
+///   `POST /upload/<id>`          -> raw bytes, returns {"ok": true}
 class ShareServer {
   static const int defaultPort = 8080;
 
