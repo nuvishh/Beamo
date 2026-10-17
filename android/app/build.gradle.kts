@@ -6,7 +6,7 @@ plugins {
 
 android {
     namespace = "com.nuvish.beamo"
-    compileSdk = 37
+    compileSdk = 36
     ndkVersion = flutter.ndkVersion
 
     compileOptions {
@@ -29,11 +29,26 @@ android {
         versionName = flutter.versionName
     }
 
+    signingConfigs {
+        create("release") {
+            val keystorePropertiesFile = rootProject.file("key.properties")
+            val props = mutableMapOf<String, String>()
+            if (keystorePropertiesFile.exists()) {
+                keystorePropertiesFile.forEachLine { line ->
+                    val parts = line.split("=", limit = 2)
+                    if (parts.size == 2) props[parts[0].trim()] = parts[1].trim()
+                }
+            }
+            keyAlias = props["keyAlias"]
+            keyPassword = props["keyPassword"]
+            storeFile = rootProject.file(props["storeFile"] ?: "beamo-release.jks")
+            storePassword = props["storePassword"]
+        }
+    }
+
     buildTypes {
         release {
-            // TODO: Add your own signing config for the release build.
-            // Signing with the debug keys for now, so `flutter run --release` works.
-            signingConfig = signingConfigs.getByName("debug")
+            signingConfig = signingConfigs.getByName("release")
         }
     }
 }
