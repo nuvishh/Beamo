@@ -8,24 +8,37 @@
 
 Local-network file sharing — **phone → TV**, phone → phone. Same Wi-Fi or hotspot, no internet, no cloud, no account. Built with Flutter (Android, iOS, Android TV).
 
+## ✨ Features (v1.1)
+
+- **QR pairing** — receiver shows a QR code, sender scans it to connect instantly (no discovery wait)
+- **Batch send** — beam multiple files in one go, with per-file progress
+- **Live speed + ETA** — transfer tiles show current speed and time remaining
+- **Text notes** — send a text snippet; it arrives as a `.txt` file
+- **Transfer history** — persistent log of sent/received files
+- **Trusted devices** — "Always accept from this device" skips the accept dialog next time
+- **Browser upload** — open `http://<receiver-ip>:8080` in any browser to send a file, no app needed
+- **Downloads folder** — received files land in the public **Downloads/Beamo** folder (Android), not a hidden app dir
+
 ## How it works
 
 ```
   ┌──────────┐   mDNS: _beamo._tcp    ┌──────────┐
   │  SENDER  │ ─── discover ───────────▶ │ RECEIVER │
-  │ (phone)  │                           │ (TV)     │
+  │ (phone)  │      (or QR scan)         │ (TV)     │
   └──────────┘                           └──────────┘
-       │  POST /offer {filename, size}         │
-       │  GET  /offer/<id>/status  (poll)     │  shelf HTTP
-       │  POST /upload/<id>  (raw bytes)      │  server :8080
-       ▼                                      ▼
-   progress bar                        accept dialog → save
+       │  POST /offer {filename, size, kind, senderId}  │
+       │  GET  /offer/<id>/status  (poll)              │  shelf HTTP
+       │  POST /upload/<id>  (raw bytes)               │  server :8080
+       │  GET  /  → browser upload page                │
+       ▼                                               ▼
+   progress + speed/ETA              accept dialog → Downloads/Beamo
 ```
 
-1. **Receiver** (TV): opens *Receive files* → starts an HTTP server on port 8080 and advertises `_beamo._tcp` via mDNS/Bonjour.
-2. **Sender** (phone): opens *Send files* → browses mDNS, picks the TV, picks files.
-3. Each file: `POST /offer` → TV shows **Accept/Decline** → sender polls status → on accept, raw bytes stream via `POST /upload/<id>` with progress on both sides.
-4. If mDNS is blocked (some hotspots), enter the receiver's IP manually — the HTTP protocol doesn't care how you learned the address.
+1. **Receiver** (TV): opens *Receive files* → starts an HTTP server on port 8080 and advertises `_beamo._tcp` via mDNS/Bonjour. Can also show a **QR code** for instant pairing.
+2. **Sender** (phone): opens *Send files* → browses mDNS (or scans the QR, or enters IP manually), picks files — or sends a **text note**.
+3. Each file: `POST /offer` → TV shows **Accept/Decline** (skipped for trusted devices) → sender polls status → on accept, raw bytes stream via `POST /upload/<id>` with progress, speed and ETA on both sides.
+4. Text offers carry their payload inside the offer — no upload step; the receiver saves them as `.txt`.
+5. Any browser on the same network can open `http://<receiver-ip>:8080` and send a file through the same offer flow.
 
 ## Project structure
 
@@ -34,19 +47,26 @@ lib/
   main.dart
   models/
     peer_device.dart      # discovered device (name, host, port)
-    transfer.dart         # transfer state (progress, status)
+    transfer.dart         # transfer state (progress, speed, ETA, kind)
   services/
     network_service.dart  # Wi-Fi IP lookup
     discovery_service.dart# mDNS advertise + browse (nsd)
-    share_server.dart     # shelf HTTP server (receiver)
-    share_client.dart     # HTTP client: offer → poll → upload (sender)
-    storage_service.dart  # where received files are saved
+    share_server.dart     # shelf HTTP server: offer/upload/text/browser page (receiver)
+    share_client.dart     # HTTP client: offer → poll → upload, text send (sender)
+    storage_service.dart  # staging dir + public Downloads move (MediaStore)
+    trusted_service.dart  # trusted device IDs (auto-accept)
+    history_service.dart  # persistent transfer history
   screens/
-    home_screen.dart      # Send / Receive role picker
-    send_screen.dart      # pick files, find devices, send
-    receive_screen.dart   # advertise, accept dialog, progress
+    home_screen.dart      # Send / Receive role picker + history entry
+    send_screen.dart      # pick files, QR scan, text notes, batch send
+    receive_screen.dart   # advertise, pairing QR, accept dialog, progress
+    qr_scan_screen.dart   # camera QR scanner
+    history_screen.dart   # transfer history + trusted devices
   widgets/
-    transfer_tile.dart    # progress row
+    transfer_tile.dart    # progress row (speed + ETA)
+    radar_pulse.dart      # receiver beacon animation
+    file_type_helper.dart # file-type icons
+android/app/src/main/kotlin/.../MainActivity.kt  # MethodChannel: save to public Downloads
 ```
 
 ## Setup
@@ -80,6 +100,10 @@ dart run flutter_launcher_icons
 <uses-permission android:name="android.permission.CHANGE_WIFI_MULTICAST_STATE" />
 <!-- needed for getWifiIP() on Android 10+ -->
 <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
+<!-- QR code scanning -->
+<uses-permission android:name="android.permission.CAMERA" />
+<!-- public Downloads fallback on Android 9 and below (MediaStore needs none on 10+) -->
+<uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" android:maxSdkVersion="28" />
 ```
 
 ### iOS — `ios/Runner/Info.plist`
@@ -91,6 +115,8 @@ dart run flutter_launcher_icons
 <array>
   <string>_beamo._tcp</string>
 </array>
+<key>NSCameraUsageDescription</key>
+<string>Beamo uses the camera to scan pairing QR codes.</string>
 ```
 
 ## 📺 Android TV notes
@@ -102,18 +128,18 @@ dart run flutter_launcher_icons
   <uses-feature android:name="android.software.leanback" android:required="false" />
   ```
   and an `android:banner` on the launcher activity (optional).
-- Received files land in the app-specific external dir
-  (`Android/data/<package>/files/Beamo`) — visible in the TV's file manager.
+- Received files land in the public **Downloads/Beamo** folder — visible in the TV's file manager and gallery apps.
 
 ## 📶 Hotspot tips
 
 - Phone hotspot ON → TV joins the hotspot → same LAN, works.
-- Some hotspots block mDNS multicast: if the TV doesn't appear, use **Manual IP** on the sender (the TV shows its IP on the Receive screen).
-- iOS Personal Hotspot + Android TV: same deal — manual IP is the reliable fallback.
+- Some hotspots block mDNS multicast: if the TV doesn't appear, **scan the receiver's QR** or use **Manual IP** on the sender (the TV shows its IP on the Receive screen).
+- iOS Personal Hotspot + Android TV: same deal — QR / manual IP is the reliable fallback.
 
 ## Limitations / roadmap
 
-- [ ] One file at a time per peer (queue works, parallel doesn't yet)
+- [x] Batch send (sequential, one at a time per peer)
+- [x] Browser upload without the app
 - [ ] No resume after disconnect — large files restart
 - [ ] Receiver can't browse the sender's files (push-only for now)
 - [ ] No transfer encryption — LAN-only, don't use on untrusted networks
@@ -122,4 +148,4 @@ dart run flutter_launcher_icons
 
 ## Dependencies
 
-`nsd` (mDNS) · `shelf` + `shelf_router` (embedded server) · `http` · `file_picker` · `path_provider` · `permission_handler` · `network_info_plus` · `uuid`
+`nsd` (mDNS) · `shelf` + `shelf_router` (embedded server) · `http` · `file_picker` · `path_provider` · `permission_handler` · `network_info_plus` · `uuid` · `qr_flutter` (pairing QR) · `mobile_scanner` (QR scan) · `shared_preferences` (history + trusted devices)

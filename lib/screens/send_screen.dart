@@ -3,6 +3,7 @@ import 'dart:io';
 
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
+import 'package:permission_handler/permission_handler.dart';
 
 import '../models/peer_device.dart';
 import '../models/transfer.dart';
@@ -84,6 +85,14 @@ class _SendScreenState extends State<SendScreen> {
 
 
   Future<void> _scanQr() async {
+    final cam = await Permission.camera.request();
+    if (!cam.isGranted) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Camera permission is needed to scan QR.')),
+      );
+      return;
+    }
     final peer = await Navigator.of(context).push<PeerDevice>(
       MaterialPageRoute(builder: (_) => const QrScanScreen()),
     );
