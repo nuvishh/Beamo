@@ -9,6 +9,8 @@ enum TransferStatus {
   failed,
 }
 
+enum TransferKind { file, text }
+
 /// Mutable transfer state. The services mutate [progress]/[status] and call
 /// the UI callback; the UI just calls setState.
 class TransferInfo {
@@ -17,8 +19,11 @@ class TransferInfo {
   final int size;
   final String peerName;
   final TransferDirection direction;
+  final TransferKind kind;
   TransferStatus status;
   double progress;
+  double speedBps;
+  int? etaSeconds;
   String? savedPath;
   String? error;
 
@@ -28,8 +33,11 @@ class TransferInfo {
     required this.size,
     required this.peerName,
     required this.direction,
+    this.kind = TransferKind.file,
     this.status = TransferStatus.pending,
     this.progress = 0,
+    this.speedBps = 0,
+    this.etaSeconds,
     this.savedPath,
     this.error,
   });
@@ -41,6 +49,22 @@ class TransferInfo {
       return '${(size / (1024 * 1024)).toStringAsFixed(1)} MB';
     }
     return '${(size / (1024 * 1024 * 1024)).toStringAsFixed(2)} GB';
+  }
+
+  String get speedLabel {
+    if (speedBps < 1024) return '${speedBps.toStringAsFixed(0)} B/s';
+    if (speedBps < 1024 * 1024) {
+      return '${(speedBps / 1024).toStringAsFixed(1)} KB/s';
+    }
+    return '${(speedBps / (1024 * 1024)).toStringAsFixed(1)} MB/s';
+  }
+
+  String get etaLabel {
+    final s = etaSeconds;
+    if (s == null) return '';
+    if (s < 60) return '$s s left';
+    final m = s ~/ 60;
+    return '${m}m ${s % 60}s left';
   }
 
   String get statusLabel {

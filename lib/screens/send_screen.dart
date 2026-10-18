@@ -8,9 +8,12 @@ import '../models/peer_device.dart';
 import '../models/transfer.dart';
 import '../services/discovery_service.dart';
 import '../services/share_client.dart';
+import '../services/trusted_service.dart';
+import '../services/history_service.dart';
 import '../theme/app_theme.dart';
 import '../widgets/file_type_helper.dart';
 import '../widgets/transfer_tile.dart';
+import 'qr_scan_screen.dart';
 
 /// SENDER side: pick files, discover receivers with rich cards, and beam with live progress.
 class SendScreen extends StatefulWidget {
@@ -35,10 +38,16 @@ class _SendScreenState extends State<SendScreen> {
   bool _scanning = true;
   bool _manualBusy = false;
   bool _isSendingAll = false;
+  String? _senderId;
+  int _batchTotal = 0;
+  int _batchDone = 0;
 
   @override
   void initState() {
     super.initState();
+    TrustedService.deviceId().then((id) {
+      if (mounted) setState(() => _senderId = id);
+    });
     _startDiscovery();
   }
 
@@ -71,6 +80,31 @@ class _SendScreenState extends State<SendScreen> {
     _client.dispose();
     _manualIpController.dispose();
     super.dispose();
+  }
+
+
+  Future<void> _scanQr() async {
+    final peer = await Navigator.of(context).push<PeerDevice>(
+      MaterialPageRoute(builder: (_) => const QrScanScreen()),
+    );
+    if (peer == null || !mounted) return;
+    setState(() => _manualBusy = true);
+    final ok = await _client.ping(peer);
+    if (!mounted) return;
+    setState(() => _manualBusy = false);
+    if (ok) {
+      setState(() {
+        if (!_peers.contains(peer)) _peers = [..._peers, peer];
+        _selected = peer;
+      });
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Connected to ${peer.name} ✓')),
+      );
+    } else {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('QR looked valid but the receiver did not answer.')),
+      );
+    }
   }
 
   Future<void> _pickFiles() async {
@@ -125,6 +159,55 @@ class _SendScreenState extends State<SendScreen> {
     }
   }
 
+
+  Future<void> _sendText() async {
+    final peer = _selected;
+    if (peer == null) return;
+    final controller = TextEditingController();
+    final text = await showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Send text note'),
+        content: TextField(
+          controller: controller,
+          autofocus: true,
+          maxLines: 6,
+          maxLength: 4000,
+          decoration: const InputDecoration(
+            hintText: 'Type a message, link or snippet…',
+            border: OutlineInputBorder(),
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(ctx).pop(controller.text.trim()),
+            child: const Text('Send'),
+          ),
+        ],
+      ),
+    );
+    if (text == null || text.isEmpty || !mounted) return;
+    final key = 'text:${DateTime.now().millisecondsSinceEpoch}';
+    await _client.sendText(
+      peer: peer,
+      text: text,
+      senderName: widget.deviceName,
+      senderId: _senderId,
+      onUpdate: (info) {
+        if (!mounted) return;
+        setState(() => _transfers[key] = info);
+        if (info.status == TransferStatus.done ||
+            info.status == TransferStatus.failed) {
+          HistoryService.add(HistoryRecord.fromTransfer(info));
+        }
+      },
+    );
+  }
+
   Future<void> _sendFile(PlatformFile pf) async {
     final peer = _selected;
     final path = pf.path;
@@ -138,20 +221,39 @@ class _SendScreenState extends State<SendScreen> {
       peer: peer,
       file: File(path),
       senderName: widget.deviceName,
+      senderId: _senderId,
       onUpdate: (info) {
         if (!mounted) return;
         setState(() => _transfers[key] = info);
+        if (info.status == TransferStatus.done ||
+            info.status == TransferStatus.failed) {
+          HistoryService.add(HistoryRecord.fromTransfer(info));
+        }
       },
     );
   }
 
   Future<void> _sendAll() async {
     if (_selected == null || _files.isEmpty) return;
-    setState(() => _isSendingAll = true);
+    setState(() {
+      _isSendingAll = true;
+      _batchTotal = _files.length;
+      _batchDone = 0;
+    });
     for (final f in _files) {
       await _sendFile(f);
+      if (mounted) setState(() => _batchDone++);
     }
-    if (mounted) setState(() => _isSendingAll = false);
+    if (mounted) {
+      setState(() {
+        _isSendingAll = false;
+        _batchTotal = 0;
+        _batchDone = 0;
+      });
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Batch complete ✓')),
+      );
+    }
   }
 
   @override
@@ -162,6 +264,11 @@ class _SendScreenState extends State<SendScreen> {
       appBar: AppBar(
         title: const Text('Send Files'),
         actions: [
+          IconButton(
+            icon: const Icon(Icons.qr_code_scanner_rounded),
+            tooltip: 'Scan receiver QR',
+            onPressed: _scanQr,
+          ),
           IconButton(
             icon: const Icon(Icons.refresh_rounded),
             tooltip: 'Rescan network',
@@ -208,7 +315,7 @@ class _SendScreenState extends State<SendScreen> {
                       : const Icon(Icons.bolt_rounded, size: 22),
                   label: Text(
                     _isSendingAll
-                        ? 'Sending files…'
+                        ? 'Sending ${_batchDone + 1}/$_batchTotal…'
                         : 'Beam ${_files.length} File(s) to ${_selected!.name}',
                     style: const TextStyle(
                       fontSize: 16,
@@ -260,6 +367,14 @@ class _SendScreenState extends State<SendScreen> {
                     style: TextStyle(color: AppTheme.beamRose, fontSize: 13),
                   ),
                 ),
+              TextButton.icon(
+                onPressed: _selected == null ? null : _sendText,
+                icon: const Icon(Icons.text_snippet_outlined, size: 18),
+                label: const Text('Text'),
+                style: TextButton.styleFrom(
+                  foregroundColor: AppTheme.beamEmerald,
+                ),
+              ),
               TextButton.icon(
                 onPressed: _pickFiles,
                 icon: const Icon(Icons.add_rounded, size: 18),

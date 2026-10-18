@@ -16,13 +16,21 @@ class IncomingOffer {
   final String filename;
   final int size;
   final String senderName;
+  final String? senderId;
+  final TransferKind kind;
+  final String? text;
 
   IncomingOffer({
     required this.id,
     required this.filename,
     required this.size,
     required this.senderName,
+    this.senderId,
+    this.kind = TransferKind.file,
+    this.text,
   });
+
+  bool get isText => kind == TransferKind.text;
 }
 
 class _OfferState {
@@ -34,16 +42,23 @@ class _OfferState {
 /// HTTP server run by the RECEIVER.
 ///
 /// Protocol:
-///   GET  /ping                 -> {"name": ..., "version": 1}
-///   POST /offer                -> {"ok": true, "id": ...}   (body: filename, size, senderName)
-///   `GET  /offer/<id>/status`    -> {"status": "pending|accepted|declined|..."}
-///   `POST /upload/<id>`          -> raw bytes, returns {"ok": true}
+///   GET  /                      -> browser upload page (HTML)
+///   GET  /ping                  -> {"name": ..., "version": 2}
+///   POST /offer                 -> {"ok": true, "id": ...}
+///          body: filename, size, senderName, [senderId, kind, text]
+///   GET  /offer/<id>/status     -> {"status": "pending|accepted|declined|..."}
+///   POST /upload/<id>           -> raw bytes, returns {"ok": true}
 class ShareServer {
   static const int defaultPort = 8080;
+  static const int protocolVersion = 2;
 
   final String deviceName;
   final Future<bool> Function(IncomingOffer offer) onOffer;
   final void Function(TransferInfo info) onTransferUpdate;
+
+  /// Returns true when [senderId] belongs to a trusted device
+  /// (auto-accept, no dialog).
+  final bool Function(String? senderId) isTrusted;
 
   HttpServer? _server;
   final Map<String, _OfferState> _offers = {};
@@ -53,7 +68,8 @@ class ShareServer {
     required this.deviceName,
     required this.onOffer,
     required this.onTransferUpdate,
-  });
+    bool Function(String? senderId)? isTrusted,
+  }) : isTrusted = isTrusted ?? ((_) => false);
 
   bool get running => _server != null;
   int get port => _server?.port ?? defaultPort;
@@ -61,6 +77,7 @@ class ShareServer {
   Future<void> start({int port = defaultPort}) async {
     await stop();
     final router = Router()
+      ..get('/', _handleBrowserPage)
       ..get('/ping', _handlePing)
       ..post('/offer', _handleOffer)
       ..get('/offer/<id>/status', _handleOfferStatus)
@@ -82,16 +99,28 @@ class ShareServer {
   // ---------- handlers ----------
 
   Response _handlePing(Request req) => Response.ok(
-        jsonEncode({'name': deviceName, 'version': 1}),
+        jsonEncode({'name': deviceName, 'version': protocolVersion}),
         headers: {'content-type': 'application/json'},
+      );
+
+  Response _handleBrowserPage(Request req) => Response.ok(
+        _browserPageHtml(),
+        headers: {'content-type': 'text/html; charset=utf-8'},
       );
 
   Future<Response> _handleOffer(Request req) async {
     try {
       final data = jsonDecode(await req.readAsString()) as Map<String, dynamic>;
+      final kind = (data['kind']?.toString() == 'text')
+          ? TransferKind.text
+          : TransferKind.file;
       final filename = _sanitizeFilename((data['filename'] ?? 'file').toString());
       final size = (data['size'] as num?)?.toInt() ?? 0;
       final sender = (data['senderName'] ?? 'Unknown device').toString();
+      final senderId = data['senderId']?.toString();
+      final text = kind == TransferKind.text
+          ? data['text']?.toString() ?? ''
+          : null;
 
       final id = const Uuid().v4();
       final offer = IncomingOffer(
@@ -99,6 +128,9 @@ class ShareServer {
         filename: filename,
         size: size,
         senderName: sender,
+        senderId: senderId,
+        kind: kind,
+        text: text,
       );
       _offers[id] = _OfferState(offer: offer);
 
@@ -116,18 +148,58 @@ class ShareServer {
   }
 
   Future<void> _askUser(String id, IncomingOffer offer) async {
-    bool accepted = false;
-    try {
-      accepted = await onOffer(offer);
-    } catch (_) {
-      accepted = false;
+    bool accepted;
+    if (isTrusted(offer.senderId)) {
+      accepted = true; // trusted device: skip the dialog entirely
+    } else {
+      try {
+        accepted = await onOffer(offer);
+      } catch (_) {
+        accepted = false;
+      }
     }
     final state = _offers[id];
     if (state != null && state.status == 'pending') {
       state.status = accepted ? 'accepted' : 'declined';
-      // Expire declined/accepted-but-never-uploaded offers after 3 min.
-      Timer(const Duration(minutes: 3), () => _offers.remove(id));
+      if (accepted && offer.isText) {
+        // Text offers carry their payload in the offer itself — no upload.
+        await _completeTextOffer(id, offer);
+      } else {
+        // Expire declined/accepted-but-never-uploaded offers after 3 min.
+        Timer(const Duration(minutes: 3), () => _offers.remove(id));
+      }
     }
+  }
+
+  /// Writes an accepted text offer to a .txt file in Downloads.
+  Future<void> _completeTextOffer(String id, IncomingOffer offer) async {
+    final info = TransferInfo(
+      id: id,
+      filename: offer.filename,
+      size: offer.text?.length ?? 0,
+      peerName: offer.senderName,
+      direction: TransferDirection.receiving,
+      kind: TransferKind.text,
+      status: TransferStatus.inProgress,
+    );
+    onTransferUpdate(info);
+    try {
+      final dir = await defaultSaveDir();
+      final target =
+          await _uniqueFile(File('${dir.path}/${offer.filename}'));
+      await target.writeAsString(offer.text ?? '');
+      final publicPath =
+          await saveToPublicDownloads(target.path, offer.filename);
+      info.savedPath = publicPath ?? target.path;
+      info.status = TransferStatus.done;
+      info.progress = 1.0;
+    } catch (e) {
+      info.status = TransferStatus.failed;
+      info.error = e.toString();
+    }
+    _offers[id]?.status = info.status == TransferStatus.done ? 'done' : 'failed';
+    onTransferUpdate(info);
+    _offers.remove(id);
   }
 
   Response _handleOfferStatus(Request req, String id) {
@@ -163,6 +235,10 @@ class ShareServer {
       var received = 0;
       final total = state.offer.size;
 
+      // Speed tracking: 1-second windows.
+      var windowStart = DateTime.now();
+      var windowBytes = 0;
+
       void pushUi({bool force = false}) {
         final now = DateTime.now();
         if (force || now.difference(_lastUiPush).inMilliseconds > 250) {
@@ -175,16 +251,34 @@ class ShareServer {
       await for (final chunk in req.read()) {
         sink.add(chunk);
         received += chunk.length;
+        windowBytes += chunk.length;
         info.progress = total > 0 ? received / total : 0;
+
+        final now = DateTime.now();
+        final wMs = now.difference(windowStart).inMilliseconds;
+        if (wMs >= 1000) {
+          info.speedBps = windowBytes * 1000 / wMs;
+          final remaining = total - received;
+          info.etaSeconds =
+              info.speedBps > 0 ? remaining ~/ info.speedBps : null;
+          windowStart = now;
+          windowBytes = 0;
+        }
         pushUi();
       }
       await sink.flush();
       await sink.close();
 
+      // Move into the public Downloads/Beamo folder (Android).
+      final publicPath =
+          await saveToPublicDownloads(target.path, state.offer.filename);
+
       state.status = 'done';
       info.status = TransferStatus.done;
       info.progress = 1.0;
-      info.savedPath = target.path;
+      info.speedBps = 0;
+      info.etaSeconds = 0;
+      info.savedPath = publicPath ?? target.path;
       pushUi(force: true);
       _offers.remove(id);
 
@@ -223,5 +317,57 @@ class ShareServer {
       if (!await candidate.exists()) return candidate;
       i++;
     }
+  }
+
+  String _browserPageHtml() {
+    final name = const HtmlEscape().convert(deviceName);
+    return '''<!doctype html>
+<html><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Beamo — send to $name</title>
+<style>
+body{font-family:system-ui,sans-serif;background:#0e1116;color:#e6edf3;
+display:flex;justify-content:center;padding:32px 16px;margin:0}
+.card{background:#161b22;border:1px solid #2a3342;border-radius:16px;
+padding:28px;max-width:440px;width:100%;text-align:center}
+h2{margin:0 0 6px;font-size:20px} p{color:#8b98a9;font-size:13px}
+input[type=file]{margin:18px 0;width:100%;color:#8b98a9}
+button{background:#2f81f7;color:#fff;border:0;border-radius:10px;
+padding:12px 28px;font-size:15px;font-weight:700;cursor:pointer;width:100%}
+button:disabled{opacity:.5} #s{margin-top:14px;font-size:13px;min-height:20px}
+.bar{height:6px;background:#2a3342;border-radius:3px;margin-top:10px;overflow:hidden}
+.bar>div{height:100%;background:#2f81f7;width:0%}
+</style></head><body><div class="card">
+<h2>⚡ Beamo</h2><p>Send a file to <b>$name</b> from this browser.<br>
+No app needed — same Wi-Fi only.</p>
+<input type="file" id="f"><button id="b">Send file</button>
+<div class="bar"><div id="p"></div></div><div id="s"></div>
+<script>
+const f=document.getElementById('f'),b=document.getElementById('b'),
+s=document.getElementById('s'),p=document.getElementById('p');
+b.onclick=async()=>{
+ const file=f.files[0]; if(!file){s.textContent='Pick a file first.';return;}
+ b.disabled=true; s.textContent='Offering…';
+ try{
+  const o=await(await fetch('/offer',{method:'POST',
+   headers:{'content-type':'application/json'},
+   body:JSON.stringify({filename:file.name,size:file.size,senderName:'Browser'})})).json();
+  const id=o.id;
+  while(true){
+   const st=await(await fetch('/offer/'+id+'/status')).json();
+   if(st.status==='accepted'||st.status==='uploading')break;
+   if(st.status==='declined'){s.textContent='Declined on receiver.';b.disabled=false;return;}
+   if(st.status==='failed'){s.textContent='Offer failed.';b.disabled=false;return;}
+   await new Promise(r=>setTimeout(r,1000));
+  }
+  s.textContent='Uploading — accept on the receiver if asked…';
+  const up=await fetch('/upload/'+id,{method:'POST',body:file,
+   duplex:'half',headers:{'content-type':'application/octet-stream'}});
+  if(up.ok){s.textContent='Done ✓ — check Downloads/Beamo on the receiver.';p.style.width='100%';}
+  else{s.textContent='Upload failed: '+await up.text();}
+ }catch(e){s.textContent='Error: '+e.message;}
+ b.disabled=false;
+};
+</script></div></body></html>''';
   }
 }

@@ -3,6 +3,7 @@ import 'package:flutter/services.dart';
 
 import '../services/network_service.dart';
 import '../theme/app_theme.dart';
+import 'history_screen.dart';
 import 'receive_screen.dart';
 import 'send_screen.dart';
 
@@ -303,6 +304,30 @@ class _HomeScreenState extends State<HomeScreen> {
               onTap: () => Navigator.of(context).push(
                 MaterialPageRoute(
                   builder: (_) => ReceiveScreen(deviceName: _deviceName),
+                ),
+              ),
+            ),
+
+            const SizedBox(height: 18),
+
+            // History button
+            SizedBox(
+              width: double.infinity,
+              child: OutlinedButton.icon(
+                onPressed: () => Navigator.of(context).push(
+                  MaterialPageRoute(
+                    builder: (_) => const HistoryScreen(),
+                  ),
+                ),
+                icon: const Icon(Icons.history_rounded, size: 18),
+                label: const Text('Transfer history & trusted devices'),
+                style: OutlinedButton.styleFrom(
+                  foregroundColor: AppTheme.textSecondary,
+                  side: const BorderSide(color: AppTheme.borderDark),
+                  padding: const EdgeInsets.symmetric(vertical: 14),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(14),
+                  ),
                 ),
               ),
             ),

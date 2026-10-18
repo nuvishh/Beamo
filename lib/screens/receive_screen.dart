@@ -1,13 +1,17 @@
 import 'dart:async';
+import 'dart:convert';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:qr_flutter/qr_flutter.dart';
 import 'package:permission_handler/permission_handler.dart';
 
 import '../models/transfer.dart';
 import '../services/discovery_service.dart';
 import '../services/network_service.dart';
 import '../services/share_server.dart';
+import '../services/trusted_service.dart';
+import '../services/history_service.dart';
 import '../theme/app_theme.dart';
 import '../widgets/file_type_helper.dart';
 import '../widgets/radar_pulse.dart';
@@ -32,6 +36,7 @@ class _ReceiveScreenState extends State<ReceiveScreen> {
   String? _ip;
   bool _starting = true;
   String? _error;
+  Set<String> _trustedIds = {};
 
   @override
   void initState() {
@@ -47,10 +52,12 @@ class _ReceiveScreenState extends State<ReceiveScreen> {
     if (!mounted) return;
     setState(() => _ip = ip);
 
+    _trustedIds = await TrustedService.trustedIds();
     final server = ShareServer(
       deviceName: widget.deviceName,
       onOffer: _onOffer,
       onTransferUpdate: _onTransferUpdate,
+      isTrusted: (id) => id != null && _trustedIds.contains(id),
     );
     try {
       await server.start();
@@ -69,7 +76,54 @@ class _ReceiveScreenState extends State<ReceiveScreen> {
     setState(() => _starting = false);
   }
 
-  /// Called by the server when a sender offers a file.
+
+  /// Shows a QR code the sender can scan to connect without discovery.
+  void _showQrDialog() {
+    final payload = jsonEncode({
+      'v': 1,
+      'name': widget.deviceName,
+      'host': _ip ?? '',
+      'port': _server?.port ?? 8080,
+    });
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Scan to connect'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: Colors.white,
+                borderRadius: BorderRadius.circular(16),
+              ),
+              child: QrImageView(
+                data: payload,
+                version: QrVersions.auto,
+                size: 220,
+              ),
+            ),
+            const SizedBox(height: 12),
+            const Text(
+              'On the sender: Send files → scan this QR.',
+              textAlign: TextAlign.center,
+              style: TextStyle(fontSize: 12, color: AppTheme.textSecondary),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(),
+            child: const Text('Close'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// Called by the server when a sender offers a file or text.
+  /// Trusted devices skip this entirely (auto-accepted server-side).
   /// Shows a high-contrast accept/decline dialog (D-pad friendly: Accept focused).
   Future<bool> _onOffer(IncomingOffer offer) {
     final completer = Completer<bool>();
@@ -79,127 +133,181 @@ class _ReceiveScreenState extends State<ReceiveScreen> {
     }
 
     final meta = FileTypeHelper.getMeta(offer.filename);
+    var trustDevice = false;
 
     showDialog(
       context: context,
       barrierDismissible: false,
-      builder: (ctx) => AlertDialog(
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(22),
-          side: const BorderSide(color: AppTheme.beamEmerald, width: 1.5),
-        ),
-        title: Row(
-          children: const [
-            Icon(
-              Icons.download_rounded,
-              color: AppTheme.beamEmerald,
-              size: 26,
-            ),
-            SizedBox(width: 10),
-            Text(
-              'Incoming File',
-              style: TextStyle(
-                fontWeight: FontWeight.w800,
-                color: AppTheme.textPrimary,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setDialogState) => AlertDialog(
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(22),
+            side: const BorderSide(color: AppTheme.beamEmerald, width: 1.5),
+          ),
+          title: Row(
+            children: [
+              Icon(
+                offer.isText
+                    ? Icons.text_snippet_outlined
+                    : Icons.download_rounded,
+                color: AppTheme.beamEmerald,
+                size: 26,
               ),
-            ),
-          ],
-        ),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              '${offer.senderName} wants to beam:',
-              style: const TextStyle(
-                fontSize: 13,
-                color: AppTheme.textSecondary,
+              const SizedBox(width: 10),
+              Text(
+                offer.isText ? 'Incoming Note' : 'Incoming File',
+                style: const TextStyle(
+                  fontWeight: FontWeight.w800,
+                  color: AppTheme.textPrimary,
+                ),
               ),
-            ),
-            const SizedBox(height: 14),
-            Container(
-              padding: const EdgeInsets.all(14),
-              decoration: BoxDecoration(
-                color: AppTheme.surfaceCardDark,
-                borderRadius: BorderRadius.circular(14),
-                border: Border.all(color: AppTheme.borderDark),
-              ),
-              child: Row(
-                children: [
-                  Container(
-                    width: 44,
-                    height: 44,
-                    decoration: BoxDecoration(
-                      color: meta.color.withValues(alpha: 0.15),
-                      borderRadius: BorderRadius.circular(12),
-                    ),
-                    child: Icon(meta.icon, color: meta.color, size: 24),
+            ],
+          ),
+          content: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  offer.isText
+                      ? '${offer.senderName} sent a note:'
+                      : '${offer.senderName} wants to beam:',
+                  style: const TextStyle(
+                    fontSize: 13,
+                    color: AppTheme.textSecondary,
                   ),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          offer.filename,
-                          style: const TextStyle(
-                            fontSize: 14,
-                            fontWeight: FontWeight.w700,
-                            color: AppTheme.textPrimary,
-                          ),
-                          maxLines: 2,
-                          overflow: TextOverflow.ellipsis,
+                ),
+                const SizedBox(height: 14),
+                if (offer.isText)
+                  Container(
+                    constraints: const BoxConstraints(maxHeight: 220),
+                    padding: const EdgeInsets.all(14),
+                    decoration: BoxDecoration(
+                      color: AppTheme.surfaceCardDark,
+                      borderRadius: BorderRadius.circular(14),
+                      border: Border.all(color: AppTheme.borderDark),
+                    ),
+                    child: SingleChildScrollView(
+                      child: SelectableText(
+                        offer.text ?? '',
+                        style: const TextStyle(
+                          fontSize: 14,
+                          color: AppTheme.textPrimary,
                         ),
-                        const SizedBox(height: 4),
-                        Text(
-                          FileTypeHelper.formatBytes(offer.size),
-                          style: const TextStyle(
-                            fontSize: 12,
-                            color: AppTheme.textMuted,
+                      ),
+                    ),
+                  )
+                else
+                  Container(
+                    padding: const EdgeInsets.all(14),
+                    decoration: BoxDecoration(
+                      color: AppTheme.surfaceCardDark,
+                      borderRadius: BorderRadius.circular(14),
+                      border: Border.all(color: AppTheme.borderDark),
+                    ),
+                    child: Row(
+                      children: [
+                        Container(
+                          width: 44,
+                          height: 44,
+                          decoration: BoxDecoration(
+                            color: meta.color.withValues(alpha: 0.15),
+                            borderRadius: BorderRadius.circular(12),
+                          ),
+                          child: Icon(meta.icon, color: meta.color, size: 24),
+                        ),
+                        const SizedBox(width: 12),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                offer.filename,
+                                style: const TextStyle(
+                                  fontSize: 14,
+                                  fontWeight: FontWeight.w700,
+                                  color: AppTheme.textPrimary,
+                                ),
+                                maxLines: 2,
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                              const SizedBox(height: 4),
+                              Text(
+                                FileTypeHelper.formatBytes(offer.size),
+                                style: const TextStyle(
+                                  fontSize: 12,
+                                  color: AppTheme.textMuted,
+                                ),
+                              ),
+                            ],
                           ),
                         ),
                       ],
                     ),
                   ),
+                if (offer.senderId != null) ...[
+                  const SizedBox(height: 4),
+                  CheckboxListTile(
+                    value: trustDevice,
+                    onChanged: (v) =>
+                        setDialogState(() => trustDevice = v ?? false),
+                    title: Text(
+                      'Always accept from ${offer.senderName}',
+                      style: const TextStyle(
+                        fontSize: 12,
+                        color: AppTheme.textSecondary,
+                      ),
+                    ),
+                    controlAffinity: ListTileControlAffinity.leading,
+                    dense: true,
+                    contentPadding: EdgeInsets.zero,
+                  ),
                 ],
+              ],
+            ),
+          ),
+          actionsPadding: const EdgeInsets.all(16),
+          actions: [
+            TextButton(
+              onPressed: () {
+                Navigator.of(ctx).pop();
+                if (!completer.isCompleted) completer.complete(false);
+              },
+              style: TextButton.styleFrom(
+                foregroundColor: AppTheme.textMuted,
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 18, vertical: 14),
+              ),
+              child: const Text('Decline'),
+            ),
+            FilledButton.icon(
+              autofocus: true, // D-pad autofocused for TV remotes
+              style: FilledButton.styleFrom(
+                backgroundColor: AppTheme.beamEmerald,
+                foregroundColor: const Color(0xFF042017),
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 24, vertical: 14),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(14),
+                ),
+              ),
+              onPressed: () {
+                Navigator.of(ctx).pop();
+                if (!completer.isCompleted) completer.complete(true);
+                if (trustDevice && offer.senderId != null) {
+                  TrustedService.addTrusted(offer.senderId!).then((_) async {
+                    _trustedIds = await TrustedService.trustedIds();
+                  });
+                }
+              },
+              icon: const Icon(Icons.check_rounded, size: 20),
+              label: const Text(
+                'Accept',
+                style: TextStyle(fontWeight: FontWeight.w800, fontSize: 15),
               ),
             ),
           ],
         ),
-        actionsPadding: const EdgeInsets.all(16),
-        actions: [
-          TextButton(
-            onPressed: () {
-              Navigator.of(ctx).pop();
-              if (!completer.isCompleted) completer.complete(false);
-            },
-            style: TextButton.styleFrom(
-              foregroundColor: AppTheme.textMuted,
-              padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 14),
-            ),
-            child: const Text('Decline'),
-          ),
-          FilledButton.icon(
-            autofocus: true, // D-pad autofocused for TV remotes
-            style: FilledButton.styleFrom(
-              backgroundColor: AppTheme.beamEmerald,
-              foregroundColor: const Color(0xFF042017),
-              padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 14),
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(14),
-              ),
-            ),
-            onPressed: () {
-              Navigator.of(ctx).pop();
-              if (!completer.isCompleted) completer.complete(true);
-            },
-            icon: const Icon(Icons.check_rounded, size: 20),
-            label: const Text(
-              'Accept',
-              style: TextStyle(fontWeight: FontWeight.w800, fontSize: 15),
-            ),
-          ),
-        ],
       ),
     );
 
@@ -226,6 +334,10 @@ class _ReceiveScreenState extends State<ReceiveScreen> {
         _transfers.insert(0, info);
       }
     });
+    if (info.status == TransferStatus.done ||
+        info.status == TransferStatus.failed) {
+      HistoryService.add(HistoryRecord.fromTransfer(info));
+    }
   }
 
   @override
@@ -244,6 +356,13 @@ class _ReceiveScreenState extends State<ReceiveScreen> {
     return Scaffold(
       appBar: AppBar(
         title: const Text('Receive Files'),
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.qr_code_rounded),
+            tooltip: 'Show pairing QR',
+            onPressed: _showQrDialog,
+          ),
+        ],
       ),
       body: ListView(
         padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),

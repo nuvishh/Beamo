@@ -1,7 +1,7 @@
 name: beamo
 description: Local-network file sharing — phone to TV, phone to phone. No internet needed.
 publish_to: 'none'
-version: 1.0.0+1
+version: 1.1.0+2
 
 environment:
   sdk: '>=3.2.0 <4.0.0'
@@ -22,6 +22,10 @@ dependencies:
   path_provider: ^2.1.2
   permission_handler: ^11.3.0
   uuid: ^4.4.0
+  # v1.1: QR pairing, history, trusted devices
+  qr_flutter: ^4.1.0
+  mobile_scanner: ^7.1.0
+  shared_preferences: ^2.5.0
 
 dev_dependencies:
   flutter_test:
