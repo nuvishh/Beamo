@@ -570,7 +570,7 @@ class _ReceiveScreenState extends State<ReceiveScreen> {
                 borderRadius: BorderRadius.circular(18),
                 border: Border.all(color: AppTheme.borderDark),
               ),
-              child: Column(
+              child: const Column(
                 children: const [
                   Icon(
                     Icons.inbox_rounded,

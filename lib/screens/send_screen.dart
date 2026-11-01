@@ -93,6 +93,7 @@ class _SendScreenState extends State<SendScreen> {
       );
       return;
     }
+    if (!mounted) return;
     final peer = await Navigator.of(context).push<PeerDevice>(
       MaterialPageRoute(builder: (_) => const QrScanScreen()),
     );
@@ -502,7 +503,7 @@ class _SendScreenState extends State<SendScreen> {
                 borderRadius: BorderRadius.circular(16),
                 border: Border.all(color: AppTheme.borderDark),
               ),
-              child: Column(
+              child: const Column(
                 children: const [
                   Icon(
                     Icons.tv_off_rounded,
