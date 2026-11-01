@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -8,6 +9,7 @@ import 'package:permission_handler/permission_handler.dart';
 
 import '../models/transfer.dart';
 import '../services/discovery_service.dart';
+import '../services/external_storage_service.dart';
 import '../services/network_service.dart';
 import '../services/share_server.dart';
 import '../services/trusted_service.dart';
@@ -37,6 +39,7 @@ class _ReceiveScreenState extends State<ReceiveScreen> {
   bool _starting = true;
   String? _error;
   Set<String> _trustedIds = {};
+  UsbFolder? _usbFolder;
 
   @override
   void initState() {
@@ -72,10 +75,13 @@ class _ReceiveScreenState extends State<ReceiveScreen> {
     _server = server;
     await _discovery.startAdvertising(widget.deviceName, server.port);
 
+    if (Platform.isAndroid) {
+      _usbFolder = await ExternalStorageService.savedFolder();
+    }
+
     if (!mounted) return;
     setState(() => _starting = false);
   }
-
 
   /// Shows a QR code the sender can scan to connect without discovery.
   void _showQrDialog() {
@@ -324,6 +330,32 @@ class _ReceiveScreenState extends State<ReceiveScreen> {
     return completer.future;
   }
 
+  /// Pick a USB / external folder once; later receives go straight there.
+  /// The system picker is D-pad navigable, so this works on TV too.
+  Future<void> _pickUsbFolder() async {
+    try {
+      final folder = await ExternalStorageService.pickFolder();
+      if (!mounted) return;
+      if (folder != null) {
+        setState(() => _usbFolder = folder);
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Save folder set: ${folder.name}')),
+        );
+      }
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Could not pick folder: $e')),
+      );
+    }
+  }
+
+  Future<void> _clearUsbFolder() async {
+    await ExternalStorageService.clearFolder();
+    if (!mounted) return;
+    setState(() => _usbFolder = null);
+  }
+
   void _onTransferUpdate(TransferInfo info) {
     if (!mounted) return;
     setState(() {
@@ -549,6 +581,75 @@ class _ReceiveScreenState extends State<ReceiveScreen> {
           ),
 
           const SizedBox(height: 24),
+
+          // Save location (Android only: SAF USB folder, phone + TV)
+          if (Platform.isAndroid) ...[
+            Container(
+              padding: const EdgeInsets.all(20),
+              decoration: BoxDecoration(
+                color: AppTheme.surfaceCardDark,
+                borderRadius: BorderRadius.circular(18),
+                border: Border.all(color: AppTheme.borderDark),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Row(
+                    children: [
+                      Icon(
+                        Icons.usb_rounded,
+                        size: 22,
+                        color: AppTheme.beamEmerald,
+                      ),
+                      SizedBox(width: 10),
+                      Text(
+                        'Save location',
+                        style: TextStyle(
+                          fontSize: 16,
+                          fontWeight: FontWeight.w700,
+                          color: AppTheme.textPrimary,
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 8),
+                  Text(
+                    _usbFolder == null
+                        ? 'Downloads/Beamo'
+                        : 'USB folder: ${_usbFolder!.name}',
+                    style: const TextStyle(
+                      fontSize: 13,
+                      color: AppTheme.textSecondary,
+                    ),
+                  ),
+                  const SizedBox(height: 4),
+                  const Text(
+                    'Pick a folder on a USB drive once — Beamo remembers it, and later receives go straight there. If the drive is removed, saves fall back to Downloads.',
+                    style: TextStyle(fontSize: 12, color: AppTheme.textMuted),
+                  ),
+                  const SizedBox(height: 12),
+                  Wrap(
+                    spacing: 10,
+                    children: [
+                      FilledButton.icon(
+                        onPressed: _pickUsbFolder,
+                        icon: const Icon(Icons.folder_open_rounded, size: 18),
+                        label: Text(_usbFolder == null
+                            ? 'Choose USB folder'
+                            : 'Change folder'),
+                      ),
+                      if (_usbFolder != null)
+                        TextButton(
+                          onPressed: _clearUsbFolder,
+                          child: const Text('Back to Downloads'),
+                        ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 24),
+          ],
 
           // Transfers section
           if (_transfers.isNotEmpty) ...[

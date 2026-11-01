@@ -3,6 +3,8 @@ import 'dart:io';
 import 'package:flutter/services.dart';
 import 'package:path_provider/path_provider.dart';
 
+import 'external_storage_service.dart';
+
 /// Staging dir for incoming uploads (app-private; no permission needed).
 ///
 /// Android: app-specific external dir. TV sideloads work fine with this.
@@ -20,6 +22,19 @@ Future<Directory> defaultSaveDir() async {
     await target.create(recursive: true);
   }
   return target;
+}
+
+/// Saves a staged received file to its final home: the user-picked USB
+/// folder when one is set, else the public Downloads/Beamo folder.
+/// Returns the display path, or null when both failed — the caller then
+/// keeps the staged file as-is.
+Future<String?> saveReceivedFile(String sourcePath, String filename) async {
+  if (Platform.isAndroid) {
+    final usbPath =
+        await ExternalStorageService.saveToUsb(sourcePath, filename);
+    if (usbPath != null) return usbPath;
+  }
+  return saveToPublicDownloads(sourcePath, filename);
 }
 
 /// Moves a staged file into the public Downloads/Beamo folder on Android

@@ -114,13 +114,13 @@ class ShareServer {
       final kind = (data['kind']?.toString() == 'text')
           ? TransferKind.text
           : TransferKind.file;
-      final filename = _sanitizeFilename((data['filename'] ?? 'file').toString());
+      final filename =
+          _sanitizeFilename((data['filename'] ?? 'file').toString());
       final size = (data['size'] as num?)?.toInt() ?? 0;
       final sender = (data['senderName'] ?? 'Unknown device').toString();
       final senderId = data['senderId']?.toString();
-      final text = kind == TransferKind.text
-          ? data['text']?.toString() ?? ''
-          : null;
+      final text =
+          kind == TransferKind.text ? data['text']?.toString() ?? '' : null;
 
       final id = const Uuid().v4();
       final offer = IncomingOffer(
@@ -185,11 +185,9 @@ class ShareServer {
     onTransferUpdate(info);
     try {
       final dir = await defaultSaveDir();
-      final target =
-          await _uniqueFile(File('${dir.path}/${offer.filename}'));
+      final target = await _uniqueFile(File('${dir.path}/${offer.filename}'));
       await target.writeAsString(offer.text ?? '');
-      final publicPath =
-          await saveToPublicDownloads(target.path, offer.filename);
+      final publicPath = await saveReceivedFile(target.path, offer.filename);
       info.savedPath = publicPath ?? target.path;
       info.status = TransferStatus.done;
       info.progress = 1.0;
@@ -197,7 +195,8 @@ class ShareServer {
       info.status = TransferStatus.failed;
       info.error = e.toString();
     }
-    _offers[id]?.status = info.status == TransferStatus.done ? 'done' : 'failed';
+    _offers[id]?.status =
+        info.status == TransferStatus.done ? 'done' : 'failed';
     onTransferUpdate(info);
     _offers.remove(id);
   }
@@ -230,7 +229,8 @@ class ShareServer {
 
     try {
       final dir = await defaultSaveDir();
-      final target = await _uniqueFile(File('${dir.path}/${state.offer.filename}'));
+      final target =
+          await _uniqueFile(File('${dir.path}/${state.offer.filename}'));
       final sink = target.openWrite();
       var received = 0;
       final total = state.offer.size;
@@ -269,9 +269,10 @@ class ShareServer {
       await sink.flush();
       await sink.close();
 
-      // Move into the public Downloads/Beamo folder (Android).
+      // Move into the final save location (USB folder if set, else
+      // public Downloads/Beamo on Android).
       final publicPath =
-          await saveToPublicDownloads(target.path, state.offer.filename);
+          await saveReceivedFile(target.path, state.offer.filename);
 
       state.status = 'done';
       info.status = TransferStatus.done;
@@ -363,7 +364,7 @@ b.onclick=async()=>{
   s.textContent='Uploading — accept on the receiver if asked…';
   const up=await fetch('/upload/'+id,{method:'POST',body:file,
    duplex:'half',headers:{'content-type':'application/octet-stream'}});
-  if(up.ok){s.textContent='Done ✓ — check Downloads/Beamo on the receiver.';p.style.width='100%';}
+  if(up.ok){s.textContent='Done ✓ — check the receiver\\'s save folder (Downloads/Beamo, or its USB folder if one is set).';p.style.width='100%';}
   else{s.textContent='Upload failed: '+await up.text();}
  }catch(e){s.textContent='Error: '+e.message;}
  b.disabled=false;
