@@ -115,7 +115,7 @@ class _HomeScreenState extends State<HomeScreen> {
                 const SizedBox(width: 14),
                 const Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
-                  children: const [
+                  children: [
                     Text(
                       'BEAMO',
                       style: TextStyle(
@@ -391,7 +391,7 @@ class _HomeScreenState extends State<HomeScreen> {
                   const SizedBox(height: 8),
                   const Row(
                     crossAxisAlignment: CrossAxisAlignment.start,
-                    children: const [
+                    children: [
                       Icon(
                         Icons.info_outline_rounded,
                         size: 14,

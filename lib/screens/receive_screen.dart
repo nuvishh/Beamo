@@ -571,7 +571,7 @@ class _ReceiveScreenState extends State<ReceiveScreen> {
                 border: Border.all(color: AppTheme.borderDark),
               ),
               child: const Column(
-                children: const [
+                children: [
                   Icon(
                     Icons.inbox_rounded,
                     size: 38,

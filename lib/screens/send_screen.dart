@@ -504,7 +504,7 @@ class _SendScreenState extends State<SendScreen> {
                 border: Border.all(color: AppTheme.borderDark),
               ),
               child: const Column(
-                children: const [
+                children: [
                   Icon(
                     Icons.tv_off_rounded,
                     size: 38,
