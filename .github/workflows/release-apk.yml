@@ -44,13 +44,20 @@ jobs:
         run: flutter analyze
 
       - name: Build release APK
-        run: flutter build apk --release
+        run: flutter build apk --release --obfuscate --split-debug-info=debug-info
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
           name: beamo-release-apk
           path: build/app/outputs/flutter-apk/app-release.apk
+          retention-days: 30
+
+      - name: Upload debug info artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: beamo-debug-info
+          path: debug-info
           retention-days: 30
 
   release:
